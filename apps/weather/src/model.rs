@@ -1,8 +1,9 @@
 //! Weather's state, without `Api`: the two calls to the phone (`location` once for the place, `weather` every 15
 //! minutes while open), what they answered, the cache blob, and the texts and geometry the screens show.
 //!
-//! Hours and days count from the phone's answer (`at`, wall minutes): a cached answer moves with the clock, so the
-//! hours that passed and yesterday drop out instead of being shown as now and today.
+//! Hours and days count from the phone's answer: a cached answer moves with the clock, so the hours that passed and
+//! yesterday drop out instead of being shown as now and today. They count from the phone's hour, not the watch's
+//! at the moment the answer came (`Model::base`): the two clocks can sit on either side of an hour or of midnight.
 
 use companion_rpc as rpc;
 use core::fmt::Write;
@@ -388,9 +389,20 @@ impl Model {
         wall - self.at + self.data.age as i32
     }
 
+    /// The hour (hours since 1970, wall clock) the phone was in when it answered: the first hourly entry's, and
+    /// the one its day 0 is the day of. The watch's own hour at `at`, moved to the nearest one that is `hour0`
+    /// o'clock; without hours, the watch's.
+    fn base(&self) -> i32 {
+        let h = self.at.div_euclid(60);
+        if self.data.nh == 0 {
+            return h;
+        }
+        h + (self.data.hour0 as i32 - h.rem_euclid(24) + 36).rem_euclid(24) - 12
+    }
+
     /// Hours of the answer that passed by `wall`.
     fn hours_gone(&self, wall: i32) -> usize {
-        (wall.div_euclid(60) - self.at.div_euclid(60)).clamp(0, self.data.nh as i32) as usize
+        (wall.div_euclid(60) - self.base()).clamp(0, self.data.nh as i32) as usize
     }
 
     pub fn hours_len(&self, wall: i32) -> usize {
@@ -403,13 +415,13 @@ impl Model {
         if i >= self.data.nh {
             return None;
         }
-        let is_now = self.at.div_euclid(60) + i as i32 == wall.div_euclid(60);
+        let is_now = self.base() + i as i32 == wall.div_euclid(60);
         Some((hour_label(self.data.hour0, i as u8), is_now, self.data.hours[i]))
     }
 
     /// `wall`'s day counted from the answer's.
     fn today_index(&self, wall: i32) -> i32 {
-        wall.div_euclid(1440) - self.at.div_euclid(1440)
+        wall.div_euclid(1440) - self.base().div_euclid(24)
     }
 
     fn shown_days(&self, wall: i32) -> &[Day] {
@@ -425,7 +437,7 @@ impl Model {
     /// Row `k` of the days at `wall`: the day's number (days since 1970), whether it is today, the day.
     pub fn day_at(&self, k: usize, wall: i32) -> Option<(i32, bool, Day)> {
         let d = *self.shown_days(wall).get(k)?;
-        Some((self.at.div_euclid(1440) + d.day as i32, d.day as i32 == self.today_index(wall), d))
+        Some((self.base().div_euclid(24) + d.day as i32, d.day as i32 == self.today_index(wall), d))
     }
 
     pub fn today(&self, wall: i32) -> Option<Day> {

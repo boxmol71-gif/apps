@@ -36,18 +36,23 @@ fn answered(recs: &[Vec<u8>]) -> Model {
 }
 
 fn answered_in(recs: &[Vec<u8>], place: &str) -> Model {
+    answered_at(recs, place, WALL)
+}
+
+/// The same, with the watch's clock at `wall` when the answer comes.
+fn answered_at(recs: &[Vec<u8>], place: &str, wall: i32) -> Model {
     let mut m = Model::new();
     m.ask_now(0);
     let q = sent(&mut m, 0);
     let l = q.iter().find(|q| q[4] == 0x20).expect("asks the place");
     if place.is_empty() {
-        m.reply(&msg(l[3], rpc::DENIED, 0, 0, &[]), 50, WALL);
+        m.reply(&msg(l[3], rpc::DENIED, 0, 0, &[]), 50, wall);
     } else {
-        m.reply(&msg(l[3], 0, 0, 1, &[&[0u8; 6][..], place.as_bytes()].concat()), 50, WALL);
+        m.reply(&msg(l[3], 0, 0, 1, &[&[0u8; 6][..], place.as_bytes()].concat()), 50, wall);
     }
     let weather = q.iter().find(|q| q[4] == 0x30).expect("asks the weather");
     for (i, r) in recs.iter().enumerate() {
-        m.reply(&msg(weather[3], 0, i as u8, recs.len() as u8, r), 100, WALL);
+        m.reply(&msg(weather[3], 0, i as u8, recs.len() as u8, r), 100, wall);
     }
     m
 }
@@ -299,4 +304,36 @@ fn the_card() {
     // no day for today: the first line alone
     let m = answered(&[NOW.to_vec()]);
     assert_eq!(m.card(WALL).1.as_str(), "-3° Snow");
+}
+
+#[test]
+fn hours_and_days_count_from_the_phones_clock_not_the_watchs() {
+    // the phone answered in its 13th hour; the watch got it at 14:02: 13 is past, 14 is now
+    let at = 20_777 * 1440 + 14 * 60 + 2;
+    let m = answered_at(&week(), "", at);
+    assert_eq!(m.hours_len(at), 11);
+    assert_eq!(m.hour_at(0, at).map(|(h, n, x)| (h, n, x.temp)), Some((14, true, -3)));
+    // the other way: the phone is already in 14, the watch still at 13:59; nothing is past, 14 is not now yet
+    let at = 20_777 * 1440 + 13 * 60 + 59;
+    let mut v = week();
+    v[1] = hours(14, 12);
+    let m = answered_at(&v, "", at);
+    assert_eq!(m.hours_len(at), 12);
+    assert_eq!(m.hour_at(0, at).map(|(h, n, _)| (h, n)), Some((14, false)));
+    assert_eq!(m.hour_at(0, at + 1).map(|(h, n, _)| (h, n)), Some((14, true)));
+    // midnight: the phone answered at 23:59 of the 20th, the watch got it at 00:01 of the 21st
+    let at = 20_778 * 1440 + 1;
+    let mut v = week();
+    v[1] = hours(23, 12);
+    let m = answered_at(&v, "", at);
+    assert_eq!(m.day_at(0, at).map(|(d, today, x)| (d, today, x.min)), Some((20_778, true, -6)), "the phone's tomorrow");
+    assert_eq!(m.days_len(at), 6);
+    assert_eq!(m.hour_at(0, at).map(|(h, n, _)| (h, n)), Some((0, true)));
+    // and it survives the cache
+    let mut blob = [0u8; BLOB_MAX];
+    let n = m.save(&mut blob);
+    let mut back = Model::new();
+    assert!(back.load(&blob[..n]));
+    assert_eq!(back.day_at(0, at), m.day_at(0, at));
+    assert_eq!(back.hour_at(0, at), m.hour_at(0, at));
 }
