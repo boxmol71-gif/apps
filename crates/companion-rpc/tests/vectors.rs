@@ -293,8 +293,8 @@ fn weather() {
         } else {
             Weather::Day {
                 day: i.get("day").int() as i8,
-                min: i.get("min").int() as i8,
-                max: i.get("max").int() as i8,
+                min: i.get("min").num().round() as i8,
+                max: i.get("max").num().round() as i8,
                 code: i.get("code").int() as u8,
                 precip: i.get("precip").int() as u8,
             }
