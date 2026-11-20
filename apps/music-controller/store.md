@@ -5,4 +5,4 @@ The standalone Android **Music Companion** app shows the current track and its n
 ## Requirements
 
 - The [patched firmware](/firmware) with the channel key and the [App Loader](/firmware).
-- The standalone [Android Music Companion](https://github.com/boxmol71-gif/music-companion) app. [Download the v0.1.0 companion APK](https://github.com/boxmol71-gif/music-companion/releases/download/v0.1.0/MusicCompanion-0.1.0-debug.apk), then enable its watch bridge and grant notification-listener access.
+- The standalone [Android Music Companion](https://github.com/boxmol71-gif/music-companion) app. [Download the v0.1.1 companion APK](https://github.com/boxmol71-gif/music-companion/releases/download/v0.1.1/MusicCompanion-0.1.1-debug.apk), then enable its watch bridge and grant notification-listener access.

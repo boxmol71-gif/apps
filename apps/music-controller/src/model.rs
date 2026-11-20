@@ -81,6 +81,7 @@ pub struct Model {
     active: Option<Active>,
     commands: [Command; COMMAND_QUEUE_MAX],
     command_head: usize,
+    /// Pending commands, including the active command while it is at the queue head.
     command_len: usize,
     cache_dirty: bool,
 }
@@ -158,9 +159,9 @@ impl Model {
         }
 
         if self.command_len > 0 && due(now, self.next_command) {
+            // Keep the active command at the queue head until a valid reply completes it. If it
+            // times out or cannot be sent, the same slot is retried before later commands.
             let command = self.commands[self.command_head];
-            self.command_head = (self.command_head + 1) % COMMAND_QUEUE_MAX;
-            self.command_len -= 1;
             self.id = self.id.wrapping_add(1);
             self.active = Some(Active::Command {
                 id: self.id,
@@ -185,6 +186,8 @@ impl Model {
 
     /// Queue a playback or volume command and update the visible state immediately.
     pub fn command(&mut self, command: u8, value: u8) -> bool {
+        // The active command remains in the queue, so this bounds all pending commands rather
+        // than allowing an in-flight command plus a full queue of later commands.
         if self.command_len == COMMAND_QUEUE_MAX
             || !matches!(
                 command,
@@ -223,8 +226,9 @@ impl Model {
         true
     }
 
-    /// Recover immediately when the loader could not queue a request. A command is put back at the
-    /// front of the queue so a transient outbox or host failure does not silently drop it.
+    /// Recover immediately when the loader could not queue a request. An active command stays at
+    /// the front of the bounded queue so a transient outbox or host failure does not drop it or
+    /// move it behind commands that were entered later.
     pub fn send_failed(&mut self, now: u32) {
         let Some(active) = self.active.take() else {
             return;
@@ -233,22 +237,7 @@ impl Model {
             Active::Snapshot { .. } => {
                 self.next_poll = now.wrapping_add(self.backoff);
             }
-            Active::Command {
-                command,
-                value,
-                before,
-                ..
-            } => {
-                if self.command_len < COMMAND_QUEUE_MAX {
-                    self.command_head =
-                        (self.command_head + COMMAND_QUEUE_MAX - 1) % COMMAND_QUEUE_MAX;
-                    self.commands[self.command_head] = Command {
-                        code: command,
-                        value,
-                        before,
-                    };
-                    self.command_len += 1;
-                }
+            Active::Command { .. } => {
                 self.next_command = now.wrapping_add(self.backoff);
                 self.next_poll = now.wrapping_add(self.backoff);
             }
@@ -269,14 +258,22 @@ impl Model {
         match active {
             Active::Command { id, before, .. } if id == reply.id => {
                 self.active = None;
+                self.remove_active_command();
                 self.next_poll = now.wrapping_add(COMMAND_REFRESH_MS);
                 self.next_command = now.wrapping_add(COMMAND_REFRESH_MS);
-                self.status = if reply.status == rpc::OK {
+
+                let malformed = !reply.is_command_result();
+                self.status = if malformed {
+                    Status::Unavailable
+                } else if reply.status == rpc::OK {
                     Status::Ok
                 } else {
                     status_of(reply.status)
                 };
-                let rolled_back = reply.status != rpc::OK && self.rollback_command(before);
+                // A malformed result is not a successful command. Treat it like a rejected
+                // command so the optimistic effect cannot survive without a valid acknowledgement.
+                let rolled_back =
+                    (malformed || reply.status != rpc::OK) && self.rollback_command(before);
                 self.rev += 1;
                 if rolled_back {
                     self.cache_dirty = true;
@@ -288,6 +285,13 @@ impl Model {
             Active::Snapshot { id, .. } if id == reply.id => self.snapshot(reply, now, wall),
             _ => Got::Nothing,
         }
+    }
+
+    /// Remove the command currently at the queue head after a terminal reply.
+    fn remove_active_command(&mut self) {
+        debug_assert!(self.command_len > 0);
+        self.command_head = (self.command_head + 1) % COMMAND_QUEUE_MAX;
+        self.command_len -= 1;
     }
 
     /// Restore the state before a denied command, then reapply commands still queued behind it.
@@ -351,7 +355,9 @@ impl Model {
         self.next_poll = now.wrapping_add(POLL_MS);
         self.active = None;
 
-        if !old.same_data(&metadata) {
+        // Compare the effective state after queued optimistic commands are reapplied. The raw
+        // snapshot can equal the old optimistic value even though the final visible state differs.
+        if !old.same_data(&self.metadata) {
             self.rev += 1;
             self.cache_dirty = true;
             Got::Save
@@ -692,6 +698,35 @@ mod tests {
     }
 
     #[test]
+    fn a_timed_out_command_at_queue_capacity_is_not_lost() {
+        let mut model = Model::new();
+        for _ in 0..COMMAND_QUEUE_MAX {
+            assert!(model.command(rpc::VOLUME_UP, 0));
+        }
+
+        let first_id = match model.poll(0).unwrap() {
+            rpc::Request::Command(bytes) => bytes[3],
+            _ => panic!("expected command"),
+        };
+        // The active command still occupies a queue slot, so later input cannot hide it.
+        assert!(!model.command(rpc::VOLUME_DOWN, 0));
+        assert!(model.poll(COMMAND_TIMEOUT_MS).is_none());
+
+        let retry_at = COMMAND_TIMEOUT_MS + RETRY_MS * 2;
+        let retry_id = match model.poll(retry_at).unwrap() {
+            rpc::Request::Command(bytes) => bytes[3],
+            _ => panic!("expected retried command"),
+        };
+        assert_ne!(retry_id, first_id);
+        assert_eq!(
+            model.reply(&reply(retry_id, 0, 0, 0, &[]), retry_at + 1, 100),
+            Got::Changed
+        );
+        // Completing the head frees exactly one slot.
+        assert!(model.command(rpc::VOLUME_DOWN, 0));
+    }
+
+    #[test]
     fn an_optimistic_command_marks_the_cache_dirty() {
         let mut model = Model::new();
         let id = match model.poll(0).unwrap() {
@@ -706,6 +741,63 @@ mod tests {
         assert!(model.save(&mut blob) > 0);
         model.cache_saved();
         assert!(!model.cache_dirty());
+    }
+
+    #[test]
+    fn snapshot_saves_when_reapplied_optimistic_state_changes() {
+        let mut model = Model::new();
+        let id = match model.poll(0).unwrap() {
+            rpc::Request::Snapshot(bytes) => bytes[3],
+            _ => panic!("expected snapshot"),
+        };
+        model.reply(&reply(id, 0, 0, 1, &metadata_record(3, 7, 15)), 10, 100);
+        model.cache_saved();
+
+        let id = match model.poll(POLL_MS + 10).unwrap() {
+            rpc::Request::Snapshot(bytes) => bytes[3],
+            _ => panic!("expected snapshot"),
+        };
+        assert!(model.command(rpc::VOLUME_UP, 0));
+        assert_eq!(model.volume(), 8);
+        model.cache_saved();
+
+        // The raw snapshot equals the old optimistic value, but replaying the queued command
+        // changes the effective value that must be written to the cache.
+        assert_eq!(
+            model.reply(
+                &reply(id, 0, 0, 1, &metadata_record(3, 8, 15)),
+                POLL_MS + 11,
+                100,
+            ),
+            Got::Save
+        );
+        assert_eq!(model.volume(), 9);
+        assert!(model.cache_dirty());
+    }
+
+    #[test]
+    fn malformed_command_reply_is_not_accepted_as_success() {
+        let mut model = Model::new();
+        let id = match model.poll(0).unwrap() {
+            rpc::Request::Snapshot(bytes) => bytes[3],
+            _ => panic!("expected snapshot"),
+        };
+        model.reply(&reply(id, 0, 0, 1, &metadata_record(3, 7, 15)), 10, 100);
+        assert!(model.command(rpc::VOLUME_UP, 0));
+        assert_eq!(model.volume(), 8);
+
+        let id = match model.poll(11).unwrap() {
+            rpc::Request::Command(bytes) => bytes[3],
+            _ => panic!("expected command"),
+        };
+        // OK with a non-empty result shape is not a valid command acknowledgement.
+        assert_eq!(
+            model.reply(&reply(id, rpc::OK, 0, 1, &[]), 12, 100),
+            Got::Save
+        );
+        assert_eq!(model.volume(), 7);
+        assert_eq!(model.status, Status::Unavailable);
+        assert!(model.cache_dirty());
     }
 
     #[test]

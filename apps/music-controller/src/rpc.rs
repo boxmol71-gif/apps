@@ -65,6 +65,13 @@ pub struct Reply<'a> {
     pub record: &'a [u8],
 }
 
+impl Reply<'_> {
+    /// Whether this reply has the empty result shape required for a command.
+    pub fn is_command_result(&self) -> bool {
+        self.index == 0 && self.total == 0 && self.record.is_empty()
+    }
+}
+
 /// A reply on this channel; anything else is ignored.
 pub fn reply(message: &[u8]) -> Option<Reply<'_>> {
     match message {
@@ -195,10 +202,12 @@ mod tests {
             ),
             (7, OK, 0, 0, &[][..])
         );
+        assert!(first.is_command_result());
         let second_bytes = hex("4d3141080000010003070f");
         let second = reply(&second_bytes).unwrap();
         assert_eq!(second.total, 1);
         assert_eq!(second.record, &hex("0003070f")[..]);
+        assert!(!second.is_command_result());
         let invalid = hex("4d31510701");
         assert!(reply(&invalid).is_none());
         assert!(reply(&hex("52314105000000")).is_none());
