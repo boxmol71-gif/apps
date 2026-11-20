@@ -234,9 +234,10 @@ fn save_and_load() {
 #[test]
 fn temperatures() {
     assert_eq!([deg(-34), deg(-35), deg(-4), deg(4), deg(5), deg(0), deg(-5), deg(216)], [-3, -4, 0, 0, 1, 0, -1, 22]);
-    assert_eq!(temp_text(0).as_str(), "0°");
-    assert_eq!(temp_text(-12).as_str(), "-12°");
-    assert_eq!(temp_text(deg(-4)).as_str(), "0°", "never -0");
+    // the watch's fonts have no degree sign (it draws as a blank): plain numbers
+    assert_eq!(temp_text(0).as_str(), "0");
+    assert_eq!(temp_text(-12).as_str(), "-12");
+    assert_eq!(temp_text(deg(-4)).as_str(), "0", "never -0");
 }
 
 #[test]
@@ -296,14 +297,14 @@ fn the_card() {
     assert_eq!((t.as_str(), v.as_str()), ("Weather", "Open the app"));
     let m = answered(&week());
     let (t, v) = m.card(WALL);
-    assert_eq!((t.as_str(), v.as_str()), ("Weather", "-3° Snow\nH 1° L -5°"));
+    assert_eq!((t.as_str(), v.as_str()), ("Weather", "-3 Snow\nH 1 L -5"));
     let m = answered_in(&week(), "Санкт-Петербург и область");
     let (t, v) = m.card(WALL);
     assert!(t.as_str().len() <= 23 && t.as_str().starts_with("Санкт-Петер"), "{}", t.as_str());
     assert!(v.as_str().len() <= 39);
     // no day for today: the first line alone
     let m = answered(&[NOW.to_vec()]);
-    assert_eq!(m.card(WALL).1.as_str(), "-3° Snow");
+    assert_eq!(m.card(WALL).1.as_str(), "-3 Snow");
 }
 
 #[test]

@@ -8,8 +8,9 @@
 use companion_rpc as rpc;
 use core::fmt::Write;
 
-/// The degree sign after a temperature.
-pub const DEG: &str = "°";
+/// After a temperature in text: nothing. The watch's fonts have no degree sign (it draws as a blank the width of
+/// a letter, seen in the emulator), so texts carry plain numbers and the now screen draws a ring instead.
+pub const DEG: &str = "";
 /// A fresh answer this often while the app is open; the phone itself caches for 30 minutes.
 pub const PERIOD_MS: u32 = 15 * 60_000;
 /// While the phone waits for the user's "allow".
@@ -180,7 +181,7 @@ impl Write for Line {
     }
 }
 
-/// "-3°".
+/// "-3".
 pub fn temp_text(deg: i16) -> Line {
     let mut l = Line::new();
     let _ = write!(l, "{deg}{DEG}");

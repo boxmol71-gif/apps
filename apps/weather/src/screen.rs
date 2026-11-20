@@ -25,6 +25,8 @@ const WET: i32 = 0x669F; // #64D2FF
 const TRACK: i32 = 0x39C7; // #3A3A3C
 
 const MSG_W: i32 = 300;
+/// The top of the now screen's content: the place; the rest hangs below it.
+const NOW_Y: i32 = 92;
 /// The first row of the hours and days pages, and their rows' height.
 const ROWS_Y: i32 = 96;
 const HOUR_H: i32 = 58;
@@ -197,18 +199,36 @@ fn now_content(b: &mut Batch, flush: &mut Flush, parent: Obj, m: &Model, wall: i
     let Some(n) = m.now else { return Ok(()) };
     room(b, flush)?;
     if !m.place().is_empty() {
-        let l = label(b, parent, m.place(), MSG_W, 0, 62, 2)?;
+        let l = label(b, parent, m.place(), MSG_W, 0, NOW_Y, 2)?;
         b.long_mode(l, LongMode::Dot)?;
         small(b, l, GREY)?;
     }
-    let t = label(b, parent, model::temp_text(model::deg(n.temp)).as_str(), MSG_W, 0, 98, 2)?;
+    // the temperature and, since the fonts have no degree sign, a ring after it: a row as wide as the two, moved
+    // right by half the ring so the number stays in the middle
+    let row = b.create(Class::Obj, parent)?;
+    b.size(row, CONTENT, CONTENT)?;
+    plain(b, row)?;
+    b.flags(row, &[], &[Flag::Clickable, Flag::Scrollable])?;
+    b.flex(row, Flow::Row, FlexAlign::Start, FlexAlign::Start, FlexAlign::Start)?;
+    b.style(row, Prop::PadColumn, 0, 4)?;
+    b.align(row, Align::TopMid, 9, (NOW_Y + 36) as i16)?;
+    let t = b.create(Class::Label, row)?;
+    b.text(t, model::temp_text(model::deg(n.temp)).as_str())?;
     b.style(t, Prop::TextFont, 0, F48 as i32)?;
+    let ring = b.create(Class::Obj, row)?;
+    b.size(ring, 14, 14)?;
+    b.style(ring, Prop::Radius, 0, CIRCLE)?;
+    b.style(ring, Prop::BgOpa, 0, 0)?;
+    b.style(ring, Prop::BorderWidth, 0, 3)?;
+    b.style(ring, Prop::BorderColor, 0, WHITE)?;
+    b.style(ring, Prop::TranslateY, 0, 8)?;
+    b.flags(ring, &[], &[Flag::Clickable, Flag::Scrollable])?;
     // night for the icon: what the current hour says, when there are hours
     let night = m.hour_at(0, wall).is_some_and(|(_, is_now, h)| is_now && h.night);
-    icon(b, parent, model::icon(n.code), night, 0, 160, 52)?;
+    icon(b, parent, model::icon(n.code), night, 0, NOW_Y + 98, 52)?;
     room(b, flush)?;
-    label(b, parent, model::condition(n.code), MSG_W, 0, 220, 2)?;
-    let mut y = 266;
+    label(b, parent, model::condition(n.code), MSG_W, 0, NOW_Y + 158, 2)?;
+    let mut y = NOW_Y + 204;
     if let Some(d) = m.today(wall) {
         let mut l = Line::new();
         let _ = write!(l, "H:{} L:{}", model::temp_text(d.max as i16).as_str(), model::temp_text(d.min as i16).as_str());
