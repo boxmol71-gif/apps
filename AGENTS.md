@@ -129,7 +129,7 @@ again when the spec changes). `make test` runs it. Worked examples: `apps/calend
 | `reminders` | `0x11` | `reminders` | iOS | open reminders (≤ 20): id, due day and minute, flags, list colour, title |
 | `reminders.complete` | `0x12` | `reminders` | iOS | marks one done |
 | `location` | `0x20` | `location` | both | lat/lon in 0.1°, fix age, locality name |
-| `weather` | `0x30` | `weather` | both | now and up to 7 days |
+| `weather` | `0x30` | `weather` | both | now, the next hours (up to 24: temperature, code, precipitation chance, night) and up to 7 days. Hours need a companion of 2026-11-20 or later: an older one answers `BAD_REQUEST` (Android) or without the hourly record (iOS), so ask again with `hours` 0 and show no hours |
 | `http.get` | `0x40` | `http:<host>` | both | status, length, body (≤ 2048 B) of an `https://` GET |
 | `http.request` | `0x41` | `http:<host>` | both | any method with a body (multi-part), the same reply |
 | `notifications` | `0x50` | `notifications` | Android | the notifications shown now (≤ 10) |

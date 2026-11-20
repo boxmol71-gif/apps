@@ -18,7 +18,7 @@ phone answers `UNAVAILABLE` and `caps` doesn't list it. Request and record layou
 | `calendar.events` | `calendar` | both | the next 1-7 days of events |
 | `reminders`, `reminders.complete` | `reminders` | iOS | open reminders; mark one done |
 | `location` | `location` | both | 0.1° and the town |
-| `weather` | `weather` | both | now and up to 7 days |
+| `weather` | `weather` | both | now, the next hours (up to 24) and up to 7 days; hours need a companion of 2026-11-20 or later |
 | `http.get`, `http.request` | `http:<host>` | both | an HTTPS request to that host, body ≤ 2048 B |
 | `notifications` | `notifications` | Android | the notifications shown now |
 | `notify` | `notify` | both | a notification on the phone, or "find my phone" |

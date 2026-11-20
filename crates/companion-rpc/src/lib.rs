@@ -216,9 +216,14 @@ pub fn location(id: u8) -> Msg {
     Msg::small(id, method::LOCATION, &[])
 }
 
-/// `weather`: the current record, then daily ones for `days` (0-7) days.
-pub fn weather(id: u8, days: u8) -> Msg {
-    Msg::small(id, method::WEATHER, &[days])
+/// `weather`: the current record, the hourly one for the next `hours` (0-24, over counts as 24), then daily ones
+/// for `days` (0-7) days. `hours` 0 asks the way every companion understands; a companion from before hours
+/// answers `BAD_REQUEST` (Android) or without the hourly record (iOS) to anything else.
+pub fn weather(id: u8, days: u8, hours: u8) -> Msg {
+    if hours == 0 {
+        return Msg::small(id, method::WEATHER, &[days]);
+    }
+    Msg::small(id, method::WEATHER, &[days, hours.min(24)])
 }
 
 /// `http.get` of an `https://` URL of at most 123 bytes.
@@ -349,7 +354,7 @@ pub fn storage_put<'a>(id: u8, key: &str, value: &[u8], out: &'a mut [u8; JOINED
 #[derive(Clone, Copy, Debug)]
 pub enum Job<'a> {
     Web { method: u8, url: &'a str, body: &'a [u8] },
-    Weather { days: u8 },
+    Weather { days: u8, hours: u8 },
     Calendar { from_day: i8, days: u8, limit: u8 },
 }
 
@@ -372,10 +377,11 @@ pub fn job_set<'a>(id: u8, job: u8, minutes: u16, what: Job<'_>, target: u8, out
             out[3] = 0;
             5 + http_payload(&mut out[5..], method, url, body)?
         }
-        Job::Weather { days } => {
+        Job::Weather { days, hours } => {
             out[3] = 1;
             out[5] = days;
-            6
+            out[6] = hours.min(24);
+            if hours == 0 { 6 } else { 7 }
         }
         Job::Calendar { from_day, days, limit } => {
             out[3] = 2;
@@ -689,13 +695,24 @@ impl Location {
     }
 }
 
-/// `weather` records: the current one first, then one per day.
+/// One hour of `Weather::Hours`: `temp` °C, `code` WMO, `precip` probability %, `night` for a moon instead of a sun.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Hour {
+    pub temp: i8,
+    pub code: u8,
+    pub precip: u8,
+    pub night: bool,
+}
+
+/// `weather` records: the current one first, then the hourly one if hours were asked, then one per day.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Weather {
     /// `temp` 0.1 °C, `code` WMO, `wind` m/s, `humidity` %, `age` minutes since fetched (≤ 255).
     Now { temp: i16, code: u8, wind: u8, humidity: u8, age: u8 },
     /// `day` 0 = today, `min`/`max` °C, `precip` probability %.
     Day { day: i8, min: i8, max: i8, code: u8, precip: u8 },
+    /// `n` (≤ 24) consecutive hours from `hour`, the local hour (0-23) that contains now: read them with `hour(i)`.
+    Hours { hour: u8, n: u8, data: [u8; 72] },
 }
 
 impl Weather {
@@ -704,6 +721,24 @@ impl Weather {
         match r.u8()? {
             0 => Some(Weather::Now { temp: r.u16()? as i16, code: r.u8()?, wind: r.u8()?, humidity: r.u8()?, age: r.u8()? }),
             1 => Some(Weather::Day { day: r.u8()? as i8, min: r.u8()? as i8, max: r.u8()? as i8, code: r.u8()?, precip: r.u8()? }),
+            2 => {
+                let hour = r.u8()?;
+                let n = (r.0.len() / 3).min(24); // a cut entry is dropped
+                let mut data = [0; 72];
+                data[..n * 3].copy_from_slice(&r.0[..n * 3]);
+                Some(Weather::Hours { hour, n: n as u8, data })
+            }
+            _ => None,
+        }
+    }
+
+    /// Hour `i` of an hourly record, 0 the one that contains now.
+    pub fn hour(&self, i: usize) -> Option<Hour> {
+        match self {
+            Weather::Hours { n, data, .. } if i < *n as usize => {
+                let e = &data[i * 3..];
+                Some(Hour { temp: e[0] as i8, code: e[1], precip: e[2] & 0x7F, night: e[2] & 0x80 != 0 })
+            }
             _ => None,
         }
     }
@@ -856,8 +891,8 @@ mod tests {
         assert!(http_request(1, http::GET, "http://e.com", b"", &mut out).is_none());
         assert!(storage_put(1, "k", &[0; JOINED_MAX - 2], &mut out).is_some_and(|p| p.total() == 9));
         assert!(storage_put(1, "k", &[0; JOINED_MAX - 1], &mut out).is_none());
-        assert!(job_set(1, 0, 30, Job::Weather { days: 3 }, JOB_WIDGET, &mut out).is_none());
-        assert!(job_set(1, 4, 30, Job::Weather { days: 3 }, JOB_BLOB, &mut out).is_none());
+        assert!(job_set(1, 0, 30, Job::Weather { days: 3, hours: 0 }, JOB_WIDGET, &mut out).is_none());
+        assert!(job_set(1, 4, 30, Job::Weather { days: 3, hours: 0 }, JOB_BLOB, &mut out).is_none());
     }
 
     #[test]

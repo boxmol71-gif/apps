@@ -266,6 +266,22 @@ fn location() {
 fn weather() {
     for r in vectors().get("weather").arr() {
         let i = r.get("in");
+        if i.get("kind").str() == "hours" {
+            let Some(w @ Weather::Hours { hour, n, .. }) = Weather::decode(&r.get("hex").hex()) else { panic!("not hours") };
+            let hours = i.get("hours").arr();
+            assert_eq!((hour as i64, n as usize), (i.get("hour").int(), hours.len()));
+            for (k, h) in hours.iter().enumerate() {
+                let want = Hour {
+                    temp: h.get("temp").num().round() as i8,
+                    code: h.get("code").int() as u8,
+                    precip: h.get("precip").int() as u8,
+                    night: h.get("night").truthy(),
+                };
+                assert_eq!(w.hour(k), Some(want));
+            }
+            assert_eq!(w.hour(hours.len()), None);
+            continue;
+        }
         let want = if i.get("kind").str() == "now" {
             Weather::Now {
                 temp: (i.get("temp").num() * 10.0).round() as i16,
@@ -285,6 +301,30 @@ fn weather() {
         };
         assert_eq!(Weather::decode(&r.get("hex").hex()), Some(want));
     }
+}
+
+#[test]
+fn weather_args() {
+    for r in vectors().get("weather_args").arr() {
+        if r.get("bad").truthy() {
+            continue; // what the phone refuses; `weather` can't build them except hours over 24, cut below
+        }
+        let m = companion_rpc::weather(9, r.get("days").int() as u8, r.get("hours").int() as u8);
+        assert_eq!(&m[..], &[&hex("52315109")[..], &[0x30], &r.get("args").hex()[..]].concat()[..]);
+    }
+    assert_eq!(&companion_rpc::weather(9, 3, 30)[..], &hex("5231510930").iter().copied().chain([3, 24]).collect::<Vec<u8>>()[..], "hours over 24 are 24");
+}
+
+#[test]
+fn weather_hours_odd_lengths() {
+    // a cut entry is dropped; more than 24 hours are 24; no entry at all is still a record
+    let Some(w @ Weather::Hours { n: 1, .. }) = Weather::decode(&[2, 5, 1, 2, 3, 9, 9]) else { panic!() };
+    assert_eq!(w.hour(0), Some(Hour { temp: 1, code: 2, precip: 3, night: false }));
+    let long = [&[2u8, 23][..], &[0x80u8; 90][..]].concat();
+    let Some(w @ Weather::Hours { n: 24, hour: 23, .. }) = Weather::decode(&long) else { panic!() };
+    assert_eq!(w.hour(23), Some(Hour { temp: -128, code: 0x80, precip: 0, night: true }));
+    assert!(matches!(Weather::decode(&[2, 7]), Some(Weather::Hours { n: 0, .. })));
+    assert_eq!(Weather::decode(&[2]), None);
 }
 
 #[test]
@@ -397,7 +437,7 @@ fn jobs() {
                 let (url_len, url) = (spec[1] as usize, &spec[2..2 + spec[1] as usize]);
                 Job::Web { method: spec[0], url: std::str::from_utf8(url).unwrap(), body: &spec[2 + url_len..] }
             }
-            1 => Job::Weather { days: spec[0] },
+            1 => Job::Weather { days: spec[0], hours: spec.get(1).copied().unwrap_or(0) },
             _ => Job::Calendar { from_day: spec[0] as i8, days: spec[1], limit: spec[2] },
         };
         // the vectors' `minutes` is what the phone makes of the payload's; build from the payload's own
